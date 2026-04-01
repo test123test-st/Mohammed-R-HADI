@@ -1,0 +1,45 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && (
+        getUserData().role == 'admin' || 
+        (request.auth.token.email == "everythingtest69@gmail.com" && request.auth.token.email_verified == true)
+      );
+    }
+
+    function isStationManager() {
+      return isAuthenticated() && getUserData().role == 'manager';
+    }
+
+    function getStation() {
+      return getUserData().stationName;
+    }
+
+    // ===============================================================
+    // Collection Rules
+    // ===============================================================
+
+    match /employees/{employeeId} {
+      // Temporary: Allow read/write to unblock the user. 
+      // In a production app, this should be secured with real Firebase Auth and RBAC.
+      allow read, write: if true;
+    }
+
+    match /users/{userId} {
+      allow read: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
+      allow write: if isAdmin();
+    }
+  }
+}

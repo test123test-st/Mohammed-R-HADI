@@ -1,0 +1,72 @@
+{
+  "entities": {
+    "Employee": {
+      "title": "Employee",
+      "description": "بيانات الموظف الشاملة",
+      "type": "object",
+      "properties": {
+        "fullName": { "type": "string" },
+        "employeeId": { "type": "string" },
+        "phone": { "type": "string" },
+        "appointmentDate": { "type": "string" },
+        "certificate": { "type": "string" },
+        "maritalStatus": { "type": "string" },
+        "spouseName": { "type": "string" },
+        "spouseNationalId": { "type": "string" },
+        "childrenCount": { "type": "integer" },
+        "childrenDetails": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string" },
+              "nationalId": { "type": "string" }
+            }
+          }
+        },
+        "residenceProvince": { "type": "string" },
+        "residenceDistrict": { "type": "string" },
+        "station": { "type": "string" },
+        "section": { "type": "string", "default": "شعبة الرادار" },
+        "images": {
+          "type": "object",
+          "properties": {
+            "nationalIdFront": { "type": "string" },
+            "nationalIdBack": { "type": "string" },
+            "rationCardFront": { "type": "string" },
+            "rationCardBack": { "type": "string" },
+            "residenceCardFront": { "type": "string" },
+            "residenceCardBack": { "type": "string" },
+            "spouseIdFront": { "type": "string" },
+            "spouseIdBack": { "type": "string" },
+            "childrenIds": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "createdBy": { "type": "string" },
+        "stationId": { "type": "string" }
+      },
+      "required": ["fullName", "employeeId", "phone", "station"]
+    },
+    "User": {
+      "title": "User",
+      "description": "مستخدمي النظام (مدراء المحطات والآدمن)",
+      "type": "object",
+      "properties": {
+        "username": { "type": "string" },
+        "password": { "type": "string" },
+        "role": { "type": "string" },
+        "stationName": { "type": "string" }
+      }
+    }
+  },
+  "firestore": {
+    "/employees/{employeeId}": {
+      "schema": "Employee",
+      "description": "سجلات الموظفين"
+    },
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "حسابات الوصول"
+    }
+  }
+}
