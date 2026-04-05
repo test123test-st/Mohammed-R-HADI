@@ -1,5 +1,5 @@
 export interface Employee {
-  id?: string;
+  id?: number;
   fullName: string;
   motherName: string;
   employeeId: string;
@@ -8,6 +8,9 @@ export interface Employee {
   certificate: string;
   specialization: string;
   jobTitle: string;
+  nationalIdNumber?: string;
+  rationCardNumber?: string;
+  residenceCardNumber?: string;
   maritalStatus: 'single' | 'married' | 'divorced' | 'widowed';
   spouseName?: string;
   spouseNationalId?: string;

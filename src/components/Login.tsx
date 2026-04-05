@@ -1,8 +1,6 @@
 import React, { useState } from 'react';
-import { LogIn, Shield, Radio } from 'lucide-react';
+import { LogIn, Radio } from 'lucide-react';
 import { motion } from 'motion/react';
-import { auth } from '../firebase';
-import { signInAnonymously } from 'firebase/auth';
 
 interface LoginProps {
   onLogin: (username: string, role: 'admin' | 'manager', station?: string) => void;

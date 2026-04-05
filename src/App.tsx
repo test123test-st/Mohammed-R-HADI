@@ -4,69 +4,12 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { 
-  collection, 
-  addDoc, 
-  onSnapshot, 
-  query, 
-  where, 
-  updateDoc, 
-  deleteDoc, 
-  doc, 
-  writeBatch
-} from 'firebase/firestore';
-import { db, auth } from './firebase';
-import { signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+import { db } from './db';
+import { useLiveQuery } from 'dexie-react-hooks';
 
-enum OperationType {
-  CREATE = 'create',
-  UPDATE = 'update',
-  DELETE = 'delete',
-  LIST = 'list',
-  GET = 'get',
-  WRITE = 'write',
-}
-
-interface FirestoreErrorInfo {
-  error: string;
-  operationType: OperationType;
-  path: string | null;
-  authInfo: {
-    userId: string | undefined;
-    email: string | null | undefined;
-    emailVerified: boolean | undefined;
-    isAnonymous: boolean | undefined;
-    tenantId: string | null | undefined;
-    providerInfo: {
-      providerId: string;
-      displayName: string | null;
-      email: string | null;
-      photoUrl: string | null;
-    }[];
-  }
-}
-
-function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
-  const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
-    authInfo: {
-      userId: auth.currentUser?.uid,
-      email: auth.currentUser?.email,
-      emailVerified: auth.currentUser?.emailVerified,
-      isAnonymous: auth.currentUser?.isAnonymous,
-      tenantId: auth.currentUser?.tenantId,
-      providerInfo: auth.currentUser?.providerData.map(provider => ({
-        providerId: provider.providerId,
-        displayName: provider.displayName,
-        email: provider.email,
-        photoUrl: provider.photoURL
-      })) || []
-    },
-    operationType,
-    path
-  };
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
+function handleLocalError(error: unknown, operationType: string) {
+  console.error(`Local DB Error (${operationType}): `, error);
+  throw new Error(String(error));
 }
 import { 
   Plus, 
@@ -96,13 +39,12 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Employee, AppUser, IRAQ_PROVINCES, STATIONS, CERTIFICATES } from './types';
-import { exportToExcel, exportToPDF, fileToBase64, importFromExcel } from './utils';
+import { exportToExcel, exportToPDF, exportProfileToPDF, fileToBase64, importFromExcel } from './utils';
 import { Login } from './components/Login';
 import { Toaster, toast } from 'sonner';
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
-  const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -123,6 +65,9 @@ export default function App() {
     certificate: 'بكالوريوس',
     specialization: '',
     jobTitle: '',
+    nationalIdNumber: '',
+    rationCardNumber: '',
+    residenceCardNumber: '',
     maritalStatus: 'single',
     childrenCount: 0,
     residenceProvince: 'بغداد',
@@ -142,30 +87,6 @@ export default function App() {
       setCurrentUser(parsedUser);
     }
     setLoading(false);
-
-    const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
-      if (user) {
-        console.log('Firebase Auth: Signed in as', user.uid);
-      } else {
-        console.log('Firebase Auth: Signed out');
-      }
-    });
-
-    // Test Firestore connection
-    const testConnection = async () => {
-      try {
-        const { getDocFromServer, doc } = await import('firebase/firestore');
-        await getDocFromServer(doc(db, 'test', 'connection'));
-        console.log('Firestore connection successful');
-      } catch (error) {
-        if (error instanceof Error && error.message.includes('the client is offline')) {
-          console.error("Please check your Firebase configuration.");
-        }
-      }
-    };
-    testConnection();
-
-    return () => unsubscribeAuth();
   }, []);
 
   const handleLogin = (username: string, role: 'admin' | 'manager', station?: string) => {
@@ -179,25 +100,18 @@ export default function App() {
     localStorage.removeItem('app_user');
   };
 
-  useEffect(() => {
-    if (!currentUser) return;
-
-    const path = 'employees';
-    let q = query(collection(db, path));
+  const employees = useLiveQuery(async () => {
+    if (!currentUser) return [];
     
     if (currentUser.role === 'manager' && currentUser.stationName) {
-      q = query(collection(db, path), where('station', '==', currentUser.stationName));
+      return await db.employees
+        .where('station')
+        .equals(currentUser.stationName)
+        .toArray();
     }
-
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Employee[];
-      setEmployees(list);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, path);
-    });
-
-    return () => unsubscribe();
-  }, [currentUser]);
+    
+    return await db.employees.toArray();
+  }, [currentUser]) || [];
 
   const handleSubmit = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -237,39 +151,37 @@ export default function App() {
       return;
     }
 
-    const path = 'employees';
     const data = {
       ...formData,
       updatedAt: new Date().toISOString(),
       createdBy: currentUser.username,
       station: currentUser.role === 'manager' ? currentUser.stationName : formData.station
-    };
+    } as Employee;
 
     try {
       if (editingEmployee?.id) {
-        await updateDoc(doc(db, path, editingEmployee.id), data);
+        await db.employees.update(editingEmployee.id, data as any);
         toast.success('تم تحديث بيانات الموظف بنجاح');
       } else {
-        await addDoc(collection(db, path), { ...data, createdAt: new Date().toISOString() });
+        await db.employees.add({ ...data, createdAt: new Date().toISOString() } as Employee);
         toast.success('تم إضافة الموظف بنجاح');
       }
       setShowConfirmSave(false);
       closeModal();
     } catch (error) {
       toast.error('حدث خطأ أثناء حفظ البيانات');
-      handleFirestoreError(error, editingEmployee?.id ? OperationType.UPDATE : OperationType.CREATE, path);
+      handleLocalError(error, editingEmployee?.id ? 'UPDATE' : 'CREATE');
     }
   };
 
-  const handleDelete = async (id: string) => {
+  const handleDelete = async (id: number | string) => {
     if (!window.confirm('هل أنت متأكد من حذف بيانات هذا الموظف نهائياً؟')) return;
-    const path = 'employees';
     try {
-      await deleteDoc(doc(db, path, id));
+      await db.employees.delete(id as any);
       toast.success('تم حذف الموظف بنجاح');
     } catch (error) {
       toast.error('حدث خطأ أثناء الحذف');
-      handleFirestoreError(error, OperationType.DELETE, path);
+      handleLocalError(error, 'DELETE');
     }
   };
 
@@ -277,17 +189,12 @@ export default function App() {
     if (currentUser?.role !== 'admin') return;
     if (!window.confirm('تحذير: سيتم مسح كافة البيانات في النظام. هل أنت متأكد؟')) return;
     
-    const path = 'employees';
     try {
-      const batch = writeBatch(db);
-      employees.forEach(emp => {
-        if (emp.id) batch.delete(doc(db, path, emp.id));
-      });
-      await batch.commit();
+      await db.employees.clear();
       toast.success('تم مسح كافة البيانات بنجاح');
     } catch (error) {
       toast.error('حدث خطأ أثناء مسح البيانات');
-      handleFirestoreError(error, OperationType.WRITE, path);
+      handleLocalError(error, 'CLEAR');
     }
   };
 
@@ -298,20 +205,15 @@ export default function App() {
     const toastId = toast.loading('جاري استيراد البيانات...');
     try {
       const importedData = await importFromExcel(file);
-      const batch = writeBatch(db);
-      const path = 'employees';
       
-      importedData.forEach(emp => {
-        const newDocRef = doc(collection(db, path));
-        batch.set(newDocRef, {
-          ...emp,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-          createdBy: currentUser.username
-        });
-      });
+      const employeesToImport = importedData.map(emp => ({
+        ...emp,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        createdBy: currentUser.username
+      })) as Employee[];
 
-      await batch.commit();
+      await db.employees.bulkAdd(employeesToImport);
       toast.success('تم استيراد البيانات بنجاح', { id: toastId });
     } catch (error) {
       console.error(error);
@@ -616,8 +518,20 @@ export default function App() {
                     <input type="text" className="w-full px-5 py-4 bg-slate-50 border-none rounded-2xl focus:ring-2 focus:ring-blue-500 outline-none font-bold" value={formData.section} onChange={e => setFormData({...formData, section: e.target.value})} />
                   </div>
                   <div className="space-y-3">
-                    <label className={`text-sm font-black ${formErrors.includes('jobTitle') ? 'text-red-500' : 'text-slate-700'} mr-2`}>العنوان الوظيفي *</label>
+                    <label className="text-sm font-black text-slate-700 mr-2">العنوان الوظيفي *</label>
                     <input required type="text" className={`w-full px-5 py-4 bg-slate-50 border-2 ${formErrors.includes('jobTitle') ? 'border-red-500' : 'border-transparent'} rounded-2xl focus:ring-2 focus:ring-blue-500 outline-none font-bold`} value={formData.jobTitle} onChange={e => { setFormData({...formData, jobTitle: e.target.value}); setFormErrors(prev => prev.filter(f => f !== 'jobTitle')); }} />
+                  </div>
+                  <div className="space-y-3">
+                    <label className="text-sm font-black text-slate-700 mr-2">رقم البطاقة الوطنية</label>
+                    <input type="text" className="w-full px-5 py-4 bg-slate-50 border-none rounded-2xl focus:ring-2 focus:ring-blue-500 outline-none font-bold font-mono" value={formData.nationalIdNumber} onChange={e => setFormData({...formData, nationalIdNumber: e.target.value})} />
+                  </div>
+                  <div className="space-y-3">
+                    <label className="text-sm font-black text-slate-700 mr-2">رقم البطاقة التموينية</label>
+                    <input type="text" className="w-full px-5 py-4 bg-slate-50 border-none rounded-2xl focus:ring-2 focus:ring-blue-500 outline-none font-bold font-mono" value={formData.rationCardNumber} onChange={e => setFormData({...formData, rationCardNumber: e.target.value})} />
+                  </div>
+                  <div className="space-y-3">
+                    <label className="text-sm font-black text-slate-700 mr-2">رقم بطاقة السكن</label>
+                    <input type="text" className="w-full px-5 py-4 bg-slate-50 border-none rounded-2xl focus:ring-2 focus:ring-blue-500 outline-none font-bold font-mono" value={formData.residenceCardNumber} onChange={e => setFormData({...formData, residenceCardNumber: e.target.value})} />
                   </div>
                   <div className="space-y-3">
                     <label className={`text-sm font-black ${formErrors.includes('station') ? 'text-red-500' : 'text-slate-700'} mr-2`}>المحطة *</label>
@@ -850,8 +764,8 @@ export default function App() {
                   </div>
                 </div>
                 <div className="flex items-center gap-4">
-                  <button onClick={() => window.print()} className="p-4 bg-slate-100 hover:bg-slate-200 rounded-2xl transition-all flex items-center gap-2 text-slate-600 font-black">
-                    <Printer className="w-6 h-6" /> طباعة
+                  <button onClick={() => exportProfileToPDF(viewingEmployee)} className="p-4 bg-slate-100 hover:bg-slate-200 rounded-2xl transition-all flex items-center gap-2 text-slate-600 font-black">
+                    <Printer className="w-6 h-6" /> تصدير PDF للطباعة
                   </button>
                   <button onClick={() => setViewingEmployee(null)} className="p-4 hover:bg-slate-100 rounded-full transition-all"><X className="w-8 h-8 text-slate-300" /></button>
                 </div>
@@ -866,6 +780,9 @@ export default function App() {
                       <div className="flex justify-between border-b border-slate-50 pb-3"><span className="text-slate-400 text-sm font-bold">الشعبة/القسم:</span><span className="font-black text-slate-800">{viewingEmployee.section}</span></div>
                       <div className="flex justify-between border-b border-slate-50 pb-3"><span className="text-slate-400 text-sm font-bold">الاختصاص:</span><span className="font-black text-slate-800">{viewingEmployee.specialization}</span></div>
                       <div className="flex justify-between border-b border-slate-50 pb-3"><span className="text-slate-400 text-sm font-bold">العنوان الوظيفي:</span><span className="font-black text-slate-800">{viewingEmployee.jobTitle}</span></div>
+                      <div className="flex justify-between border-b border-slate-50 pb-3"><span className="text-slate-400 text-sm font-bold">رقم البطاقة الوطنية:</span><span className="font-black text-slate-800 font-mono">{viewingEmployee.nationalIdNumber || '-'}</span></div>
+                      <div className="flex justify-between border-b border-slate-50 pb-3"><span className="text-slate-400 text-sm font-bold">رقم البطاقة التموينية:</span><span className="font-black text-slate-800 font-mono">{viewingEmployee.rationCardNumber || '-'}</span></div>
+                      <div className="flex justify-between border-b border-slate-50 pb-3"><span className="text-slate-400 text-sm font-bold">رقم بطاقة السكن:</span><span className="font-black text-slate-800 font-mono">{viewingEmployee.residenceCardNumber || '-'}</span></div>
                       <div className="flex justify-between border-b border-slate-50 pb-3"><span className="text-slate-400 text-sm font-bold">الشهادة:</span><span className="font-black text-slate-800">{viewingEmployee.certificate}</span></div>
                       <div className="flex justify-between border-b border-slate-50 pb-3"><span className="text-slate-400 text-sm font-bold">تاريخ التعيين:</span><span className="font-black text-slate-800">{viewingEmployee.appointmentDate}</span></div>
                       <div className="flex justify-between border-b border-slate-50 pb-3"><span className="text-slate-400 text-sm font-bold">الهاتف:</span><span className="font-black text-slate-800 font-mono">{viewingEmployee.phone}</span></div>
